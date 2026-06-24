@@ -159,7 +159,18 @@ eff = n_rounds × rank × (out × u_bits + s_bits + in × v_bits) / (out × in)
 | 4 | 31 | 3.883 | 0.617x |
 | 8 | 15 | 3.757 | 0.630x |
 
-⚠️ u4s4v4 的 PPL 测试需要 torch + transformers 环境，见 `tests/test_u4s4v4_ppl.py`
+### u4s4v4 PPL 测试 (OPT-125M)
+
+由于 CPU 上 SVD 迭代极慢（47轮×60层=2820次SVD分解超时），只收集到部分数据点：
+
+| 配置 | 轮数 | eff | PPL | Delta |
+|------|------|-----|-----|-------|
+| rank=8 u4s4v4 | 5 | 0.47 | 4979.69 | +4942.35 |
+| rank=1 u4s4v4 | 10 | 0.09 | 31465.10 | +31427.75 |
+
+结论：eff<1.0 时 PPL 极高，需接近 4.0 的轮数才有实用价值。
+rank=8 u4s4v4 47轮需 ~100min CPU 时间，完整测试建议在 GPU 上运行。
+见 `tests/test_u4s4v4_ppl.py`
 
 ### MSE 表现分析
 
