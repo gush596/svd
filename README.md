@@ -24,21 +24,29 @@ svd/
 ## 快速开始
 
 ```bash
+# 安装依赖
+pip install -r requirements.txt
+
 # NumPy 算法验证（快速，不需要模型下载）
 python tests/test_numpy.py
 
 # 迭代残差 SVD 测试
 python tests/test_iterative.py
 
+# u4v4 / s不量化实验
+python tests/test_u4v4_exp.py
+
 # 真实模型 PPL 测试
 python tests/test_model.py --quick
 
 # 完整测试
 python tests/test_model.py
-
-# 只测 SVD hybrid
-python tests/test_model.py --method svd_hybrid
 ```
+
+### GPU 支持
+
+有 CUDA GPU 时自动使用 GPU 加速 SVD 分解，无需手动配置。
+仅影响 SVD 计算速度，不影响量化结果。
 
 ## 算法概览
 
@@ -66,7 +74,12 @@ eff = rank*(out+in)*svd_bits/(out*in) + 4
 ```
 每轮: SVD分解 → 量化U/S/V → 更新残差
 最终残差舍弃，不量化
-eff = n_rounds × rank × (out × u_bits + s_bits + in × v_bits) / (out × in)
+
+原始 eff: eff_raw = n_rounds × [rank × (out × u_bits + in × v_bits) + rank × s_bits_eff] / (out × in)
+综合 eff: eff_full = (svd_bits_total + scale_bits_total) / (out × in)
+
+s_bits=None 时 S 不量化 (float32), s_bits_eff=32
+推荐配置: rank=8~32, u4v4, s不量化
 ```
 
 ## 等效 bit 计算

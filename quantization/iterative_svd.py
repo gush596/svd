@@ -12,25 +12,51 @@
 
 等效 bit 公式：
     eff = n_rounds × rank × (out × u_bits + s_bits + in × v_bits) / (out × in)
+
+综合等效 bit 公式（含 scale/zero-point 存储开销）：
+    每轮每个量化矩阵的 group 数 = ceil(元素数 / group_size)
+    每个 group 需要 1 个 float32 scale（32 bit）
+    eff_full = n_rounds × [rank × (out × u_bits + in × v_bits) + s_bits]
+               + n_rounds × n_groups_per_round × 32] / (out × in)
 """
 
 import numpy as np
+import math
 try:
     import torch
+    HAS_TORCH = True
 except ImportError:
     torch = None
+    HAS_TORCH = False
 from typing import Tuple, Dict, List, Optional
 from .core import quantize_mse
+
+
+def _get_device():
+    """自动检测最优设备：GPU 优先，否则 CPU"""
+    if HAS_TORCH and torch.cuda.is_available():
+        return torch.device('cuda')
+    return None  # 使用 numpy (CPU)
+
+
+def _svd_decompose(matrix, device=None):
+    """SVD 分解，自动选择 GPU/CPU"""
+    if device is not None and device.type == 'cuda':
+        t = torch.from_numpy(matrix).to(device)
+        U, S, Vt = torch.linalg.svd(t, full_matrices=False)
+        return U.cpu().numpy(), S.cpu().numpy(), Vt.cpu().numpy()
+    else:
+        return np.linalg.svd(matrix, full_matrices=False)
 
 
 def iterative_residual_svd(
     W: 'torch.Tensor | np.ndarray',
     group_size: int = 128,
     max_eff_bits: float = 4.0,
-    rank: int = 1,
-    u_bits: int = 3,
-    s_bits: int = 4,
-    v_bits: int = 3,
+    rank: int = 4,
+    u_bits: int = 4,
+    s_bits: Optional[int] = None,
+    v_bits: int = 4,
     n_rounds: Optional[int] = None,
 ) -> Tuple['torch.Tensor | np.ndarray', Dict]:
     """迭代残差 SVD 量化
@@ -40,23 +66,27 @@ def iterative_residual_svd(
         group_size: 量化分组大小
         max_eff_bits: 最大等效 bit（当 n_rounds 为 None 时用于自动计算轮数）
         rank: 每轮保留的奇异值数量（固定不变）
-        u_bits: U 矩量化的 bit 数（固定不变）
-        s_bits: S 奇异值量化的 bit 数（固定不变）
-        v_bits: V 矩量化的 bit 数（固定不变）
+        u_bits: U 矩量化的 bit 数
+        s_bits: S 奇异值量化的 bit 数，None 表示不量化（float32）
+        v_bits: V 矩量化的 bit 数
         n_rounds: 显式指定轮数（如果指定，忽略 max_eff_bits）
     
     Returns:
         (W_approx, info)
     """
-    is_torch = torch is not None and isinstance(W, torch.Tensor)
+    is_torch = HAS_TORCH and isinstance(W, torch.Tensor)
     if is_torch:
         device, dtype = W.device, W.dtype
         W_np = W.float().cpu().numpy()
     else:
         W_np = W.astype(np.float32)
     
+    # 自动选择 SVD 设备
+    svd_device = _get_device()
+    
     result, info = _iterative_residual_svd_numpy(
-        W_np, group_size, max_eff_bits, rank, u_bits, s_bits, v_bits, n_rounds
+        W_np, group_size, max_eff_bits, rank, u_bits, s_bits, v_bits,
+        n_rounds, svd_device
     )
     
     if is_torch:
@@ -70,39 +100,49 @@ def _iterative_residual_svd_numpy(
     max_eff_bits: float,
     rank: int,
     u_bits: int,
-    s_bits: int,
+    s_bits: Optional[int],
     v_bits: int,
     n_rounds_override: Optional[int],
+    svd_device=None,
 ) -> Tuple[np.ndarray, Dict]:
-    """迭代残差 SVD 量化 (NumPy 实现)
-    
-    算法：
-    - 每轮对当前残差做 SVD，取 top-rank 个奇异值
-    - 分别量化 U, S, V，重建本轮分量
-    - 残差 = 上一轮残差 - 本轮分量
-    - 最终残差舍弃（不量化）
-    """
+    """迭代残差 SVD 量化 (NumPy 实现)"""
     out_dim, in_dim = W.shape
     total_params = W.size
     W_f = W.astype(np.float32)
     
-    # 计算每轮的等效 bit 增量
-    round_bits = rank * (out_dim * u_bits + s_bits + in_dim * v_bits)
-    round_eff = round_bits / total_params
+    # s_bits=None 表示 S 不量化，用 float32 存储
+    s_quant = s_bits is not None
+    s_bits_eff = s_bits if s_quant else 32  # float32 = 32 bit
+    
+    # 计算每轮的等效 bit 增量（不含 scale 开销）
+    round_bits_raw = rank * (out_dim * u_bits + in_dim * v_bits) + rank * s_bits_eff
+    round_eff_raw = round_bits_raw / total_params
+    
+    # 计算含 scale 的综合等效 bit
+    # U: [out, rank] → ceil(out * rank / group_size) 个 scale
+    # S: [rank] → 1 个 scale（如果量化）
+    # V: [rank, in] → ceil(rank * in / group_size) 个 scale
+    gs_u = min(group_size, max(8, rank))
+    gs_v = min(group_size, max(8, rank))
+    n_groups_u = math.ceil(out_dim * rank / gs_u)
+    n_groups_v = math.ceil(rank * in_dim / gs_v)
+    n_groups_s = 1 if s_quant else 0
+    scale_bits_per_round = (n_groups_u + n_groups_s + n_groups_v) * 32
+    round_bits_full = round_bits_raw + scale_bits_per_round
+    round_eff_full = round_bits_full / total_params
     
     # 确定轮数
     if n_rounds_override is not None:
         n_rounds = n_rounds_override
     else:
-        # 根据 max_eff_bits 自动计算最大轮数
-        n_rounds = int(max_eff_bits / round_eff)
+        # 用综合 eff 计算最大轮数（更保守）
+        n_rounds = int(max_eff_bits / round_eff_full)
     
     if n_rounds <= 0:
-        # 连一轮都跑不了
         W_q = quantize_mse(W_f, n_bits=4, group_size=group_size)
         return W_q, {
-            'rounds': 0,
-            'effective_bits': 4.0,
+            'rounds': 0, 'effective_bits': 4.0,
+            'effective_bits_full': 4.0,
             'mse': float(np.mean((W_f - W_q) ** 2)),
             'fallback': 'direct_quant',
         }
@@ -112,62 +152,67 @@ def _iterative_residual_svd_numpy(
     W_approx = np.zeros_like(W_f)
     round_infos = []
     
+    device_tag = 'cuda' if (svd_device and svd_device.type == 'cuda') else 'cpu'
+    
     for i in range(n_rounds):
         # SVD 分解当前残差
-        U, S, Vt = np.linalg.svd(residual, full_matrices=False)
+        U, S, Vt = _svd_decompose(residual, svd_device)
         
-        # 限制 rank
         actual_rank = min(rank, len(S))
         
-        # 提取 top-k
         U_k = U[:, :actual_rank]         # [out, rank]
         S_k = S[:actual_rank]            # [rank]
         V_k = Vt[:actual_rank, :]        # [rank, in]
         
-        # 分别量化 U, S, V
+        # 量化 U
         gs_u = min(group_size, max(8, actual_rank))
         U_q = quantize_mse(U_k, n_bits=u_bits, group_size=gs_u)
         
-        gs_s = min(group_size, max(8, actual_rank))
-        S_q = quantize_mse(S_k.reshape(1, -1), n_bits=s_bits, group_size=gs_s).reshape(-1)
+        # 量化 S（可选）
+        if s_quant:
+            gs_s = min(group_size, max(8, actual_rank))
+            S_q = quantize_mse(S_k.reshape(1, -1), n_bits=s_bits, group_size=gs_s).reshape(-1)
+        else:
+            S_q = S_k  # 不量化，直接用 float32
         
+        # 量化 V
         gs_v = min(group_size, max(8, actual_rank))
         V_q = quantize_mse(V_k, n_bits=v_bits, group_size=gs_v)
         
         # 重建本轮分量
         component = U_q @ np.diag(S_q) @ V_q
         W_approx = W_approx + component
-        
-        # 更新残差
         residual = residual - component
         
-        # 记录信息
-        round_info = {
+        round_infos.append({
             'round': i + 1,
             'rank': actual_rank,
             'u_bits': u_bits,
-            's_bits': s_bits,
+            's_bits': s_bits_eff,
             'v_bits': v_bits,
-            'round_bits': actual_rank * (out_dim * u_bits + s_bits + in_dim * v_bits),
+            'round_bits_raw': actual_rank * (out_dim * u_bits + in_dim * v_bits) + actual_rank * s_bits_eff,
+            'scale_bits': scale_bits_per_round,
             'residual_norm': float(np.linalg.norm(residual)),
             'residual_mse': float(np.mean(residual ** 2)),
-        }
-        round_infos.append(round_info)
+        })
     
-    # 最终残差舍弃，不量化
-    # W_approx 就是最终结果
+    # 最终残差舍弃
+    svd_bits_total = sum(r['round_bits_raw'] for r in round_infos)
+    scale_bits_total = sum(r['scale_bits'] for r in round_infos)
     
-    # 计算总等效 bit（不含残差）
-    svd_bits_total = sum(r['round_bits'] for r in round_infos)
-    eff_bits = svd_bits_total / total_params
+    eff_bits_raw = svd_bits_total / total_params
+    eff_bits_full = (svd_bits_total + scale_bits_total) / total_params
     
     info = {
         'rounds': len(round_infos),
         'round_details': round_infos,
-        'effective_bits': float(eff_bits),
+        'effective_bits': float(eff_bits_raw),           # 不含 scale
+        'effective_bits_full': float(eff_bits_full),     # 含 scale/zero-point
+        'scale_bits_per_round': scale_bits_per_round,
         'mse': float(np.mean((W_f - W_approx) ** 2)),
         'residual_discarded': True,
         'residual_mse': float(np.mean(residual ** 2)),
+        'svd_device': device_tag,
     }
     
     return W_approx, info
@@ -177,16 +222,32 @@ def compute_max_rounds(
     out_dim: int,
     in_dim: int,
     max_eff_bits: float,
-    rank: int = 1,
-    u_bits: int = 3,
-    s_bits: int = 4,
-    v_bits: int = 3,
+    rank: int = 4,
+    u_bits: int = 4,
+    s_bits: Optional[int] = None,
+    v_bits: int = 4,
+    group_size: int = 128,
+    use_full_eff: bool = True,
 ) -> int:
     """计算给定预算下最大可执行轮数
     
-    公式:
-        n_rounds = floor(max_eff_bits × out × in / (rank × (out × u_bits + s_bits + in × v_bits)))
+    Args:
+        use_full_eff: True 用综合 eff（含 scale），更保守；False 用原始 eff
     """
     total_params = out_dim * in_dim
-    round_bits = rank * (out_dim * u_bits + s_bits + in_dim * v_bits)
+    s_bits_eff = s_bits if s_bits is not None else 32
+    
+    round_bits_raw = rank * (out_dim * u_bits + in_dim * v_bits) + rank * s_bits_eff
+    
+    if use_full_eff:
+        gs_u = min(group_size, max(8, rank))
+        gs_v = min(group_size, max(8, rank))
+        n_groups_u = math.ceil(out_dim * rank / gs_u)
+        n_groups_v = math.ceil(rank * in_dim / gs_v)
+        n_groups_s = 1 if s_bits is not None else 0
+        scale_bits = (n_groups_u + n_groups_s + n_groups_v) * 32
+        round_bits = round_bits_raw + scale_bits
+    else:
+        round_bits = round_bits_raw
+    
     return int(max_eff_bits * total_params / round_bits)
