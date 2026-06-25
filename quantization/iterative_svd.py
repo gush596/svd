@@ -110,9 +110,13 @@ def _iterative_residual_svd_numpy(
     total_params = W.size
     W_f = W.astype(np.float32)
     
-    # s_bits=None 表示 S 不量化，用 float32 存储
-    s_quant = s_bits is not None
-    s_bits_eff = s_bits if s_quant else 32  # float32 = 32 bit
+    # s_bits 处理:
+    #   None → 不量化, fp32 存储 (32 bit)
+    #   16   → 不量化, fp16 存储 (16 bit)
+    #   2/3/4 → 量化到指定位数
+    s_quant = s_bits is not None and s_bits < 16
+    s_use_fp16 = (s_bits == 16)
+    s_bits_eff = s_bits if s_bits is not None else 32  # None=fp32, 16=fp16, 2/3/4=quantized
     
     # 计算每轮的等效 bit 增量（不含 scale 开销）
     round_bits_raw = rank * (out_dim * u_bits + in_dim * v_bits) + rank * s_bits_eff
@@ -126,7 +130,7 @@ def _iterative_residual_svd_numpy(
     gs_v = min(group_size, max(8, rank))
     n_groups_u = math.ceil(out_dim * rank / gs_u)
     n_groups_v = math.ceil(rank * in_dim / gs_v)
-    n_groups_s = 1 if s_quant else 0
+    n_groups_s = 1 if s_quant else 0  # fp16/fp32 都不需要 scale
     scale_bits_per_round = (n_groups_u + n_groups_s + n_groups_v) * 32
     round_bits_full = round_bits_raw + scale_bits_per_round
     round_eff_full = round_bits_full / total_params
@@ -168,12 +172,14 @@ def _iterative_residual_svd_numpy(
         gs_u = min(group_size, max(8, actual_rank))
         U_q = quantize_mse(U_k, n_bits=u_bits, group_size=gs_u)
         
-        # 量化 S（可选）
+        # 量化 S
         if s_quant:
             gs_s = min(group_size, max(8, actual_rank))
             S_q = quantize_mse(S_k.reshape(1, -1), n_bits=s_bits, group_size=gs_s).reshape(-1)
+        elif s_use_fp16:
+            S_q = S_k.astype(np.float16).astype(np.float32)  # fp16 截断，计算用 fp32
         else:
-            S_q = S_k  # 不量化，直接用 float32
+            S_q = S_k  # fp32
         
         # 量化 V
         gs_v = min(group_size, max(8, actual_rank))

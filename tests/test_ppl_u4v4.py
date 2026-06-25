@@ -171,29 +171,21 @@ def main():
     if args.quick:
         configs = [
             # (rank, u_bits, s_bits, v_bits, desc)
-            (32, 4, None, 4, "rank=32 u4 s-fp32 v4"),
-            (32, 3, None, 3, "rank=32 u3 s-fp32 v3"),
+            (16, 4, 16, 4, "rank=16 u4 s-fp16 v4"),
+            (16, 3, 16, 3, "rank=16 u3 s-fp16 v3"),
         ]
     else:
         configs = [
-            # 不同 rank, u4v4, s 不量化
-            (8,  4, None, 4, "rank=8  u4 s-fp32 v4"),
+            # rank=16, u4v4, s-fp16
+            (16, 4, 16, 4, "rank=16 u4 s-fp16 v4"),
+            (16, 3, 16, 3, "rank=16 u3 s-fp16 v3"),
+            (16, 4, 16, 3, "rank=16 u4 s-fp16 v3"),
+            # rank=16, u4v4, s-fp32 (对比)
             (16, 4, None, 4, "rank=16 u4 s-fp32 v4"),
-            (24, 4, None, 4, "rank=24 u4 s-fp32 v4"),
-            (32, 4, None, 4, "rank=32 u4 s-fp32 v4"),
-            (48, 4, None, 4, "rank=48 u4 s-fp32 v4"),
-            (64, 4, None, 4, "rank=64 u4 s-fp32 v4"),
-            # 不同 rank, u3v3, s 不量化
-            (16, 3, None, 3, "rank=16 u3 s-fp32 v3"),
-            (24, 3, None, 3, "rank=24 u3 s-fp32 v3"),
-            (32, 3, None, 3, "rank=32 u3 s-fp32 v3"),
-            (48, 3, None, 3, "rank=48 u3 s-fp32 v3"),
-            (64, 3, None, 3, "rank=64 u3 s-fp32 v3"),
-            # u4v3
-            (32, 4, None, 3, "rank=32 u4 s-fp32 v3"),
-            (48, 4, None, 3, "rank=48 u4 s-fp32 v3"),
-            (64, 4, None, 3, "rank=64 u4 s-fp32 v3"),
-            (96, 4, None, 3, "rank=96 u4 s-fp32 v3"),
+            # rank=32, u4v4, s-fp16
+            (32, 4, 16, 4, "rank=32 u4 s-fp16 v4"),
+            # rank=8, u4v4, s-fp16
+            (8, 4, 16, 4, "rank=8  u4 s-fp16 v4"),
         ]
     
     # 过滤 rank
