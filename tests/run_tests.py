@@ -252,12 +252,11 @@ def test_mse_iter_outlier_tune(W, W_f, direct_mse, asymmetric=False):
     print(f"  基线: sym 4-bit={sym4_mse:.6f}  asym 4-bit={asym4_mse:.6f}")
 
     configs = []
-    for ratio in [0.05, 0.10, 0.15, 0.20]:
-        for rank in [4, 8, 16]:
-            for ub, vb in [(3, 3)]:
-                for svd_eff in [0.5, 1.0, 1.5, 2.0]:
-                    desc = f"r={ratio} eff={svd_eff} rk={rank} u{ub}v{vb}"
-                    configs.append((ratio, svd_eff, 3, rank, ub, vb, desc))
+    for ratio in [0.10, 0.15, 0.20]:
+        for rank in [4, 8]:
+            for svd_eff in [0.5, 1.0, 1.5]:
+                desc = f"r={ratio} eff={svd_eff} rk={rank} u3v3"
+                configs.append((ratio, svd_eff, 3, rank, 3, 3, desc))
 
     print(f"  共 {len(configs)} 个配置 × 2 (对称/非对称)")
     print(f"\n  {'配置':<30} {'sym_MSE':<12} {'asym_MSE':<12} {'sym_ratio':<10} {'asym_ratio':<10} {'改善':<8}")
