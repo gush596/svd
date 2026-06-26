@@ -49,17 +49,18 @@ from quantization.core import quantize_mse
 #  MSE 测试方案（合成数据，快速验证）
 # ═══════════════════════════════════════════════════════════════════════
 
-def test_mse_direct(W, W_f, direct_mse):
+def test_mse_direct(W, W_f, direct_mse, asymmetric=False):
     """直接 4-bit 量化基线"""
     from quantization.core import quantize_mse
-    print_section("直接量化基线")
-    W_q = quantize_mse(W, 4, 128)
+    tag = "非对称" if asymmetric else "对称"
+    print_section(f"直接量化基线 ({tag})")
+    W_q = quantize_mse(W, 4, 128, asymmetric=asymmetric)
     mse = float(np.mean((W_f - W_q) ** 2))
-    print(f"  Direct 4-bit MSE: {mse:.6f} (ratio=1.000)")
-    return [{'method': 'direct_4bit', 'mse': mse, 'ratio': 1.0, 'eff': 4.0}]
+    print(f"  Direct 4-bit ({tag}) MSE: {mse:.6f} (ratio=1.000)")
+    return [{'method': f'direct_4bit_{tag}', 'mse': mse, 'ratio': 1.0, 'eff': 4.0}]
 
 
-def test_mse_important(W, W_f, direct_mse, quick=False):
+def test_mse_important(W, W_f, direct_mse, quick=False, asymmetric=False):
     """重要值保护"""
     from quantization.important import important_protection
     print_section("重要值保护")
@@ -84,7 +85,7 @@ def test_mse_important(W, W_f, direct_mse, quick=False):
     return results
 
 
-def test_mse_svd_hybrid(W, W_f, direct_mse, quick=False):
+def test_mse_svd_hybrid(W, W_f, direct_mse, quick=False, asymmetric=False):
     """SVD Hybrid"""
     from quantization.svd_hybrid import svd_hybrid
     print_section("SVD Hybrid")
@@ -109,7 +110,7 @@ def test_mse_svd_hybrid(W, W_f, direct_mse, quick=False):
     return results
 
 
-def test_mse_iterative_svd(W, W_f, direct_mse, quick=False):
+def test_mse_iterative_svd(W, W_f, direct_mse, quick=False, asymmetric=False):
     """迭代残差 SVD（残差舍弃模式）"""
     from quantization.iterative_svd import iterative_residual_svd
     print_section("迭代残差 SVD（残差舍弃）")
@@ -138,7 +139,7 @@ def test_mse_iterative_svd(W, W_f, direct_mse, quick=False):
         t0 = time.time()
         W_q, info = iterative_residual_svd(
             W, 128, max_eff_bits=4.0, rank=rank,
-            u_bits=ub, s_bits=sb, v_bits=vb,
+            u_bits=ub, s_bits=sb, v_bits=vb, asymmetric=asymmetric,
         )
         elapsed = time.time() - t0
         mse = float(np.mean((W_f - W_q.astype(np.float32)) ** 2))
@@ -157,7 +158,7 @@ def test_mse_iterative_svd(W, W_f, direct_mse, quick=False):
     return results
 
 
-def test_mse_outlier_svd(W, W_f, direct_mse, quick=False):
+def test_mse_outlier_svd(W, W_f, direct_mse, quick=False, asymmetric=False):
     """异常值 SVD + 残差量化"""
     from quantization.outlier_svd import outlier_svd_quantize
     print_section("异常值 SVD + 残差量化")
@@ -185,7 +186,7 @@ def test_mse_outlier_svd(W, W_f, direct_mse, quick=False):
         W_q, info = outlier_svd_quantize(
             W, outlier_ratio=ratio, svd_eff_bits=svd_eff,
             residual_bits=res_bits, svd_rank=4, svd_u_bits=3, svd_v_bits=3,
-            svd_s_bits=16, group_size=128,
+            svd_s_bits=16, group_size=128, asymmetric=asymmetric,
         )
         elapsed = time.time() - t0
         mse = float(np.mean((W_f - W_q.astype(np.float32)) ** 2))
@@ -202,7 +203,7 @@ def test_mse_outlier_svd(W, W_f, direct_mse, quick=False):
     return results
 
 
-def test_mse_iterative_outlier(W, W_f, direct_mse, quick=False):
+def test_mse_iterative_outlier(W, W_f, direct_mse, quick=False, asymmetric=False):
     """迭代异常值 SVD + 残差量化"""
     from quantization.iterative_outlier_svd import iterative_outlier_svd
     print_section("迭代异常值 SVD + 残差量化")
@@ -226,7 +227,7 @@ def test_mse_iterative_outlier(W, W_f, direct_mse, quick=False):
         W_q, info = iterative_outlier_svd(
             W, outlier_ratio=ratio, max_svd_eff=svd_eff,
             residual_bits=res_bits, rank=rank, u_bits=ub, v_bits=vb,
-            s_bits=16, group_size=128,
+            s_bits=16, group_size=128, asymmetric=asymmetric,
         )
         elapsed = time.time() - t0
         mse = float(np.mean((W_f - W_q.astype(np.float32)) ** 2))
@@ -240,29 +241,7 @@ def test_mse_iterative_outlier(W, W_f, direct_mse, quick=False):
     return results
 
 
-def test_mse_asymmetric(W, W_f, direct_mse, quick=False):
-    """对称 vs 非对称量化对比"""
-    from quantization.core import quantize_mse, quantize_mse_asymmetric
-    print_section("对称 vs 非对称量化")
-
-    results = []
-    # 直接量化对比
-    print("  --- 直接量化 ---")
-    for n_bits in [2, 3, 4]:
-        sym_q = quantize_mse(W, n_bits, 128)
-        asym_q = quantize_mse_asymmetric(W, n_bits, 128)
-        sym_mse = float(np.mean((W_f - sym_q) ** 2))
-        asym_mse = float(np.mean((W_f - asym_q) ** 2))
-        improve = (1 - asym_mse / sym_mse) * 100
-        print(f"  {n_bits}-bit: sym={sym_mse:.6f}  asym={asym_mse:.6f}  改善={improve:+.1f}%")
-        results.append({'method': f'direct_{n_bits}bit_sym', 'mse': sym_mse,
-                        'ratio': sym_mse/direct_mse, 'eff': float(n_bits)})
-        results.append({'method': f'direct_{n_bits}bit_asym', 'mse': asym_mse,
-                        'ratio': asym_mse/direct_mse, 'eff': float(n_bits)})
-    return results
-
-
-def test_mse_iter_outlier_tune(W, W_f, direct_mse):
+def test_mse_iter_outlier_tune(W, W_f, direct_mse, asymmetric=False):
     """迭代异常值 SVD 大范围参数扫描"""
     from quantization.iterative_outlier_svd import iterative_outlier_svd
     print_section("迭代异常值 SVD 参数扫描")
@@ -285,7 +264,7 @@ def test_mse_iter_outlier_tune(W, W_f, direct_mse):
         W_q, info = iterative_outlier_svd(
             W, outlier_ratio=ratio, max_svd_eff=svd_eff,
             residual_bits=res_bits, rank=rank, u_bits=ub, v_bits=vb,
-            s_bits=16, group_size=128,
+            s_bits=16, group_size=128, asymmetric=asymmetric,
         )
         elapsed = time.time() - t0
         mse = float(np.mean((W_f - W_q.astype(np.float32)) ** 2))
@@ -311,25 +290,26 @@ def test_mse_iter_outlier_tune(W, W_f, direct_mse):
 def run_mse_tests(args):
     """运行 MSE 测试"""
     print_section("SVD 量化 MSE 综合测试 (合成数据)")
-    print(f"  矩阵: 768×768  |  方法: {args.method}  |  quick={args.quick}")
+    asym_tag = "非对称" if args.asymmetric else "对称"
+    print(f"  矩阵: 768×768  |  方法: {args.method}  |  quick={args.quick}  |  量化: {asym_tag}")
 
     W = generate_weight_matrix(768, 768)
     W_f = W.astype(np.float32)
-    direct_mse = float(np.mean((W_f - quantize_mse(W, 4, 128)) ** 2))
-    print(f"  Direct 4-bit baseline MSE: {direct_mse:.6f}")
+    direct_mse = float(np.mean((W_f - quantize_mse(W, 4, 128, asymmetric=args.asymmetric)) ** 2))
+    print(f"  Direct 4-bit ({asym_tag}) baseline MSE: {direct_mse:.6f}")
 
+    asym = args.asymmetric
     method_map = {
-        'direct': lambda: test_mse_direct(W, W_f, direct_mse),
-        'important': lambda: test_mse_important(W, W_f, direct_mse, args.quick),
-        'svd_hybrid': lambda: test_mse_svd_hybrid(W, W_f, direct_mse, args.quick),
-        'iterative_svd': lambda: test_mse_iterative_svd(W, W_f, direct_mse, args.quick),
-        'outlier_svd': lambda: test_mse_outlier_svd(W, W_f, direct_mse, args.quick),
-        'iterative_outlier': lambda: test_mse_iterative_outlier(W, W_f, direct_mse, args.quick),
-        'asymmetric': lambda: test_mse_asymmetric(W, W_f, direct_mse, args.quick),
-        'iter_outlier_tune': lambda: test_mse_iter_outlier_tune(W, W_f, direct_mse),
+        'direct': lambda: test_mse_direct(W, W_f, direct_mse, asym),
+        'important': lambda: test_mse_important(W, W_f, direct_mse, args.quick, asym),
+        'svd_hybrid': lambda: test_mse_svd_hybrid(W, W_f, direct_mse, args.quick, asym),
+        'iterative_svd': lambda: test_mse_iterative_svd(W, W_f, direct_mse, args.quick, asym),
+        'outlier_svd': lambda: test_mse_outlier_svd(W, W_f, direct_mse, args.quick, asym),
+        'iterative_outlier': lambda: test_mse_iterative_outlier(W, W_f, direct_mse, args.quick, asym),
+        'iter_outlier_tune': lambda: test_mse_iter_outlier_tune(W, W_f, direct_mse, asym),
     }
 
-    all_methods = ['direct', 'asymmetric', 'important', 'svd_hybrid', 'iterative_svd',
+    all_methods = ['direct', 'important', 'svd_hybrid', 'iterative_svd',
                    'outlier_svd', 'iterative_outlier', 'iter_outlier_tune']
 
     if args.method == 'all':
@@ -359,10 +339,11 @@ def run_mse_tests(args):
 #  PPL 测试方案（真实模型）
 # ═══════════════════════════════════════════════════════════════════════
 
-def test_ppl_direct(model_id, tokenizer, fp_ppl, device):
+def test_ppl_direct(model_id, tokenizer, fp_ppl, device, asymmetric=False):
     """直接量化 PPL"""
     import torch
-    print_section("直接量化 PPL")
+    tag = "非对称" if asymmetric else "对称"
+    print_section(f"直接量化 PPL ({tag})")
 
     results = []
     for n_bits in [3, 4]:
@@ -372,18 +353,18 @@ def test_ppl_direct(model_id, tokenizer, fp_ppl, device):
             if hasattr(mod, 'weight') and 'lm_head' not in name:
                 W = mod.weight.data.float().cpu().numpy()
                 mod.weight.data = torch.from_numpy(
-                    quantize_mse(W, n_bits, 128)
+                    quantize_mse(W, n_bits, 128, asymmetric=asymmetric)
                 ).to(mod.weight.dtype)
         elapsed = time.time() - t0
         ppl = evaluate_ppl(model, tokenizer)
         delta = ppl - fp_ppl
-        print(f"  Direct {n_bits}-bit: PPL={ppl:.2f} delta=+{delta:.2f} ({elapsed:.0f}s)")
-        results.append({'method': f'direct_{n_bits}bit', 'ppl': ppl, 'delta': delta, 'time': elapsed})
+        print(f"  Direct {n_bits}-bit ({tag}): PPL={ppl:.2f} delta=+{delta:.2f} ({elapsed:.0f}s)")
+        results.append({'method': f'direct_{n_bits}bit_{tag}', 'ppl': ppl, 'delta': delta, 'time': elapsed})
         del model
     return results
 
 
-def test_ppl_iterative_svd(model_id, tokenizer, fp_ppl, device, quick=False):
+def test_ppl_iterative_svd(model_id, tokenizer, fp_ppl, device, quick=False, asymmetric=False):
     """迭代残差 SVD PPL"""
     import torch
     import torch.nn as nn
@@ -416,7 +397,7 @@ def test_ppl_iterative_svd(model_id, tokenizer, fp_ppl, device, quick=False):
                 W = mod.weight.data.float().cpu().numpy()
                 W_q, info = iterative_residual_svd(
                     W, 128, max_eff_bits=4.0, rank=rank,
-                    u_bits=ub, s_bits=sb, v_bits=vb,
+                    u_bits=ub, s_bits=sb, v_bits=vb, asymmetric=asymmetric,
                 )
                 mod.weight.data = torch.from_numpy(W_q).to(mod.weight.dtype)
                 layer_infos.append(info)
@@ -437,7 +418,7 @@ def test_ppl_iterative_svd(model_id, tokenizer, fp_ppl, device, quick=False):
     return results
 
 
-def test_ppl_outlier_svd(model_id, tokenizer, fp_ppl, device, quick=False):
+def test_ppl_outlier_svd(model_id, tokenizer, fp_ppl, device, quick=False, asymmetric=False):
     """异常值 SVD + 残差量化 PPL"""
     import torch
     import torch.nn as nn
@@ -470,7 +451,7 @@ def test_ppl_outlier_svd(model_id, tokenizer, fp_ppl, device, quick=False):
                 W_q, info = outlier_svd_quantize(
                     W, outlier_ratio=ratio, svd_eff_bits=svd_eff,
                     residual_bits=res_bits, svd_rank=4, svd_u_bits=3,
-                    svd_v_bits=3, svd_s_bits=16, group_size=128,
+                    svd_v_bits=3, svd_s_bits=16, group_size=128, asymmetric=asymmetric,
                 )
                 mod.weight.data = torch.from_numpy(W_q).to(mod.weight.dtype)
                 layer_infos.append(info)
@@ -489,7 +470,7 @@ def test_ppl_outlier_svd(model_id, tokenizer, fp_ppl, device, quick=False):
     return results
 
 
-def test_ppl_iterative_outlier(model_id, tokenizer, fp_ppl, device, quick=False):
+def test_ppl_iterative_outlier(model_id, tokenizer, fp_ppl, device, quick=False, asymmetric=False):
     """迭代异常值 SVD + 残差量化 PPL"""
     import torch
     import torch.nn as nn
@@ -521,7 +502,7 @@ def test_ppl_iterative_outlier(model_id, tokenizer, fp_ppl, device, quick=False)
                 W_q, info = iterative_outlier_svd(
                     W, outlier_ratio=ratio, max_svd_eff=svd_eff,
                     residual_bits=3, rank=rank, u_bits=ub, v_bits=vb,
-                    s_bits=16, group_size=128,
+                    s_bits=16, group_size=128, asymmetric=asymmetric,
                 )
                 mod.weight.data = torch.from_numpy(W_q).to(mod.weight.dtype)
                 layer_infos.append(info)
@@ -547,10 +528,11 @@ def run_ppl_tests(args):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dev_name = f"GPU ({torch.cuda.get_device_name(0)})" if device == "cuda" else "CPU"
 
-    print_section("SVD 量化 PPL 综合测试")
+    asym_tag = "非对称" if args.asymmetric else "对称"
+    print_section(f"SVD 量化 PPL 综合测试 ({asym_tag})")
     print(f"  模型: {args.model}  |  设备: {dev_name}")
     print(f"  数据: wikitext-2, {args.n_samples} samples, seqlen={args.seqlen}")
-    print(f"  方法: {args.method}")
+    print(f"  方法: {args.method}  |  量化: {asym_tag}")
 
     # FP baseline
     print("\n  加载 FP baseline...")
@@ -559,11 +541,12 @@ def run_ppl_tests(args):
     print(f"  FP Baseline PPL: {fp_ppl:.2f}")
     del model
 
+    asym = args.asymmetric
     method_map = {
-        'direct': lambda: test_ppl_direct(args.model, tokenizer, fp_ppl, device),
-        'iterative_svd': lambda: test_ppl_iterative_svd(args.model, tokenizer, fp_ppl, device, args.quick),
-        'outlier_svd': lambda: test_ppl_outlier_svd(args.model, tokenizer, fp_ppl, device, args.quick),
-        'iterative_outlier': lambda: test_ppl_iterative_outlier(args.model, tokenizer, fp_ppl, device, args.quick),
+        'direct': lambda: test_ppl_direct(args.model, tokenizer, fp_ppl, device, asym),
+        'iterative_svd': lambda: test_ppl_iterative_svd(args.model, tokenizer, fp_ppl, device, args.quick, asym),
+        'outlier_svd': lambda: test_ppl_outlier_svd(args.model, tokenizer, fp_ppl, device, args.quick, asym),
+        'iterative_outlier': lambda: test_ppl_iterative_outlier(args.model, tokenizer, fp_ppl, device, args.quick, asym),
     }
 
     all_methods_ppl = ['direct', 'iterative_svd', 'outlier_svd', 'iterative_outlier']
@@ -693,7 +676,7 @@ def main():
                         choices=["mse", "ppl", "power_iter"],
                         help="测试方案: mse=合成数据, ppl=真实模型, power_iter=幂迭代对比")
     parser.add_argument("--method", default="all",
-                        choices=["all", "direct", "asymmetric", "important", "svd_hybrid",
+                        choices=["all", "direct", "important", "svd_hybrid",
                                  "iterative_svd", "outlier_svd", "iterative_outlier",
                                  "iter_outlier_tune"],
                         help="量化方法 (默认 all)")
@@ -705,6 +688,8 @@ def main():
                         help="PPL 测试序列长度")
     parser.add_argument("--quick", action="store_true",
                         help="快速测试模式（少量配置）")
+    parser.add_argument("--asymmetric", action="store_true",
+                        help="使用非对称量化（带 zero-point）")
 
     args = parser.parse_args()
 

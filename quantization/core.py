@@ -17,29 +17,31 @@ def quantize_mse(
     n_bits: int = 4,
     group_size: int = 128,
     n_pct_search: int = 20,
+    asymmetric: bool = False,
 ) -> 'torch.Tensor | np.ndarray':
-    """MSE 最优对称量化
-    
-    对每个 group 独立搜索最优 scale，使量化后 MSE 最小。
+    """MSE 最优量化（支持对称/非对称）
     
     Args:
-        W: 权重矩阵，支持 torch.Tensor 和 np.ndarray
+        W: 权重矩阵
         n_bits: 量化比特数
         group_size: 分组大小
         n_pct_search: 百分位数搜索数量
+        asymmetric: True 用非对称量化（带 zero-point）
     
     Returns:
-        量化-反量化后的权重（与输入类型相同）
+        量化-反量化后的权重
     """
     is_torch = torch is not None and isinstance(W, torch.Tensor)
-    
     if is_torch:
         device, dtype = W.device, W.dtype
         W_np = W.float().cpu().numpy()
     else:
         W_np = W.astype(np.float32)
     
-    result = _quantize_mse_numpy(W_np, n_bits, group_size, n_pct_search)
+    if asymmetric:
+        result = _quantize_asym_numpy(W_np, n_bits, group_size, n_pct_search)
+    else:
+        result = _quantize_mse_numpy(W_np, n_bits, group_size, n_pct_search)
     
     if is_torch:
         return torch.from_numpy(result).to(device=device, dtype=dtype)

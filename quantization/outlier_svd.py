@@ -34,6 +34,7 @@ def outlier_svd_quantize(
     svd_v_bits: int = 3,
     svd_s_bits: Optional[int] = 16,
     group_size: int = 128,
+    asymmetric: bool = False,
 ) -> Tuple['torch.Tensor | np.ndarray', Dict]:
     """异常值 SVD + 残差直接量化
 
@@ -60,7 +61,7 @@ def outlier_svd_quantize(
 
     result, info = _outlier_svd_numpy(
         W_np, outlier_ratio, svd_eff_bits, residual_bits,
-        svd_rank, svd_u_bits, svd_v_bits, svd_s_bits, group_size,
+        svd_rank, svd_u_bits, svd_v_bits, svd_s_bits, group_size, asymmetric,
     )
 
     if is_torch:
@@ -78,6 +79,7 @@ def _outlier_svd_numpy(
     svd_v_bits: int,
     svd_s_bits: Optional[int],
     group_size: int,
+    asymmetric: bool = False,
 ) -> Tuple[np.ndarray, Dict]:
     """核心实现"""
     out_dim, in_dim = W.shape
@@ -100,6 +102,7 @@ def _outlier_svd_numpy(
     W_outlier_approx, svd_info = iterative_residual_svd(
         W_outlier, group_size=group_size, max_eff_bits=svd_eff_bits,
         rank=svd_rank, u_bits=svd_u_bits, s_bits=svd_s_bits, v_bits=svd_v_bits,
+        asymmetric=asymmetric,
     )
     if isinstance(W_outlier_approx, np.ndarray) is False:
         W_outlier_approx = np.array(W_outlier_approx, dtype=np.float32)
@@ -108,7 +111,7 @@ def _outlier_svd_numpy(
     residual = W_f - W_outlier_approx
 
     # ── Step 5: 对残差做 n-bit 直接量化 ──
-    W_residual_q = quantize_mse(residual, n_bits=residual_bits, group_size=group_size)
+    W_residual_q = quantize_mse(residual, n_bits=residual_bits, group_size=group_size, asymmetric=asymmetric)
 
     # ── Step 6: 合并 ──
     W_approx = W_outlier_approx + W_residual_q

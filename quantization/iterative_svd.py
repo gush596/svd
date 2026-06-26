@@ -58,6 +58,7 @@ def iterative_residual_svd(
     s_bits: Optional[int] = None,
     v_bits: int = 4,
     n_rounds: Optional[int] = None,
+    asymmetric: bool = False,
 ) -> Tuple['torch.Tensor | np.ndarray', Dict]:
     """迭代残差 SVD 量化
     
@@ -86,7 +87,7 @@ def iterative_residual_svd(
     
     result, info = _iterative_residual_svd_numpy(
         W_np, group_size, max_eff_bits, rank, u_bits, s_bits, v_bits,
-        n_rounds, svd_device
+        n_rounds, svd_device, asymmetric
     )
     
     if is_torch:
@@ -104,6 +105,7 @@ def _iterative_residual_svd_numpy(
     v_bits: int,
     n_rounds_override: Optional[int],
     svd_device=None,
+    asymmetric: bool = False,
 ) -> Tuple[np.ndarray, Dict]:
     """迭代残差 SVD 量化 (NumPy 实现)"""
     out_dim, in_dim = W.shape
@@ -143,7 +145,7 @@ def _iterative_residual_svd_numpy(
         n_rounds = int(max_eff_bits / round_eff_full)
     
     if n_rounds <= 0:
-        W_q = quantize_mse(W_f, n_bits=4, group_size=group_size)
+        W_q = quantize_mse(W_f, n_bits=4, group_size=group_size, asymmetric=asymmetric)
         return W_q, {
             'rounds': 0, 'effective_bits': 4.0,
             'effective_bits_full': 4.0,
@@ -170,12 +172,12 @@ def _iterative_residual_svd_numpy(
         
         # 量化 U
         gs_u = min(group_size, max(8, actual_rank))
-        U_q = quantize_mse(U_k, n_bits=u_bits, group_size=gs_u)
+        U_q = quantize_mse(U_k, n_bits=u_bits, group_size=gs_u, asymmetric=asymmetric)
         
         # 量化 S
         if s_quant:
             gs_s = min(group_size, max(8, actual_rank))
-            S_q = quantize_mse(S_k.reshape(1, -1), n_bits=s_bits, group_size=gs_s).reshape(-1)
+            S_q = quantize_mse(S_k.reshape(1, -1), n_bits=s_bits, group_size=gs_s, asymmetric=asymmetric).reshape(-1)
         elif s_use_fp16:
             S_q = S_k.astype(np.float16).astype(np.float32)  # fp16 截断，计算用 fp32
         else:
@@ -183,7 +185,7 @@ def _iterative_residual_svd_numpy(
         
         # 量化 V
         gs_v = min(group_size, max(8, actual_rank))
-        V_q = quantize_mse(V_k, n_bits=v_bits, group_size=gs_v)
+        V_q = quantize_mse(V_k, n_bits=v_bits, group_size=gs_v, asymmetric=asymmetric)
         
         # 重建本轮分量
         component = U_q @ np.diag(S_q) @ V_q

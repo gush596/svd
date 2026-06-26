@@ -39,6 +39,7 @@ def iterative_outlier_svd(
     v_bits: int = 3,
     s_bits: Optional[int] = 16,
     group_size: int = 128,
+    asymmetric: bool = False,
 ) -> Tuple[np.ndarray, Dict]:
     """迭代异常值 SVD + 残差量化
 
@@ -75,7 +76,7 @@ def iterative_outlier_svd(
 
     if max_rounds <= 0:
         # SVD 预算不足，直接量化
-        W_q = quantize_mse(W_f, n_bits=residual_bits, group_size=group_size)
+        W_q = quantize_mse(W_f, n_bits=residual_bits, group_size=group_size, asymmetric=asymmetric)
         return W_q, {
             'rounds': 0,
             'svd_eff_raw': 0.0,
@@ -110,17 +111,17 @@ def iterative_outlier_svd(
         V_k = Vt[:actual_rank, :]
 
         # 4. 量化 U, S, V
-        U_q = quantize_mse(U_k, n_bits=u_bits, group_size=gs_u)
+        U_q = quantize_mse(U_k, n_bits=u_bits, group_size=gs_u, asymmetric=asymmetric)
 
         if s_quant:
             gs_s = min(group_size, max(8, actual_rank))
-            S_q = quantize_mse(S_k.reshape(1, -1), n_bits=s_bits, group_size=gs_s).reshape(-1)
+            S_q = quantize_mse(S_k.reshape(1, -1), n_bits=s_bits, group_size=gs_s, asymmetric=asymmetric).reshape(-1)
         elif s_use_fp16:
             S_q = S_k.astype(np.float16).astype(np.float32)
         else:
             S_q = S_k
 
-        V_q = quantize_mse(V_k, n_bits=v_bits, group_size=gs_v)
+        V_q = quantize_mse(V_k, n_bits=v_bits, group_size=gs_v, asymmetric=asymmetric)
 
         # 5. 重建本轮分量
         component = U_q @ np.diag(S_q) @ V_q
@@ -139,7 +140,7 @@ def iterative_outlier_svd(
         })
 
     # 最终残差做 n-bit 量化
-    W_residual_q = quantize_mse(residual, n_bits=residual_bits, group_size=group_size)
+    W_residual_q = quantize_mse(residual, n_bits=residual_bits, group_size=group_size, asymmetric=asymmetric)
 
     # 合并
     W_approx = W_svd_approx + W_residual_q
@@ -163,8 +164,8 @@ def iterative_outlier_svd(
         'mse': mse,
         'mse_svd_only': mse_svd_only,
         'mse_residual_quant': mse_residual,
-        'direct_4bit_mse': float(np.mean((W_f - quantize_mse(W_f, 4, group_size)) ** 2)),
-        'direct_3bit_mse': float(np.mean((W_f - quantize_mse(W_f, 3, group_size)) ** 2)),
+        'direct_4bit_mse': float(np.mean((W_f - quantize_mse(W_f, 4, group_size, asymmetric=asymmetric)) ** 2)),
+        'direct_3bit_mse': float(np.mean((W_f - quantize_mse(W_f, 3, group_size, asymmetric=asymmetric)) ** 2)),
     }
 
     return W_approx, info
