@@ -9,6 +9,7 @@
 """
 
 import numpy as np
+import math
 try:
     import torch
 except ImportError:
@@ -87,12 +88,38 @@ def _important_protection_numpy(
     W_q_flat[mask] = W_imp_q
     W_q_flat[~mask] = W_rem_q
 
-    eff_bits = (1 - protection_ratio) * n_bits + protection_ratio * protection_bits
+    # ── 等效 bit 计算（修正）──
+    # 存储内容：
+    #   1. 量化值：(1-ratio)*n_bits + ratio*protection_bits
+    #   2. 位置 bitmap：每参数 1 bit 标记是否为重要值
+    #   3. scale/zero-point：两组量化各需 group 级 scale
+    #
+    # bitmap 方案 vs 索引方案：
+    #   bitmap:  1 bit/param（固定）
+    #   索引:    ratio * log2(n) bits/param（ratio<50% 时比 bitmap 贵）
+    #   → 采用 bitmap（更通用）
+    #
+    # scale 开销：
+    #   重要值组: ceil(n*ratio/group_size) 个 float32 scale
+    #   非重要值组: ceil(n*(1-ratio)/group_size) 个 float32 scale
+    n_groups_imp = math.ceil(n * protection_ratio / group_size)
+    n_groups_rem = math.ceil(n * (1 - protection_ratio) / group_size)
+    scale_bits = (n_groups_imp + n_groups_rem) * 32  # 每 group 一个 float32 scale
+    
+    eff_bits_values = (1 - protection_ratio) * n_bits + protection_ratio * protection_bits
+    eff_bits_bitmap = 1.0  # 每参数 1 bit 位置标记
+    eff_bits_scale = scale_bits / n
+    eff_bits = eff_bits_values + eff_bits_bitmap + eff_bits_scale
 
     info = {
         'protection_ratio': protection_ratio,
         'protection_bits': protection_bits,
+        'effective_bits_values': float(eff_bits_values),
+        'effective_bits_bitmap': 1.0,
+        'effective_bits_scale': float(eff_bits_scale),
         'effective_bits': float(eff_bits),
+        'n_protect': n_protect,
+        'n_total': n,
         'mse': float(np.mean((W_flat - W_q_flat) ** 2)),
     }
 
