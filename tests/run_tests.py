@@ -242,46 +242,66 @@ def test_mse_iterative_outlier(W, W_f, direct_mse, quick=False, asymmetric=False
 
 
 def test_mse_iter_outlier_tune(W, W_f, direct_mse, asymmetric=False):
-    """迭代异常值 SVD 大范围参数扫描"""
+    """迭代异常值 SVD 参数扫描（同时对比对称/非对称）"""
     from quantization.iterative_outlier_svd import iterative_outlier_svd
     print_section("迭代异常值 SVD 参数扫描")
+
+    # 基线
+    sym4_mse = float(np.mean((W_f - quantize_mse(W, 4, 128, asymmetric=False)) ** 2))
+    asym4_mse = float(np.mean((W_f - quantize_mse(W, 4, 128, asymmetric=True)) ** 2))
+    print(f"  基线: sym 4-bit={sym4_mse:.6f}  asym 4-bit={asym4_mse:.6f}")
 
     configs = []
     for ratio in [0.05, 0.10, 0.15, 0.20]:
         for rank in [4, 8, 16]:
-            for ub, vb in [(3, 3), (4, 4), (3, 4), (4, 3)]:
+            for ub, vb in [(3, 3)]:
                 for svd_eff in [0.5, 1.0, 1.5, 2.0]:
                     desc = f"r={ratio} eff={svd_eff} rk={rank} u{ub}v{vb}"
                     configs.append((ratio, svd_eff, 3, rank, ub, vb, desc))
 
-    print(f"  共 {len(configs)} 个配置")
-    print(f"\n  {'配置':<40} {'eff_raw':<10} {'MSE':<12} {'vs Direct':<10} {'时间':<8}")
-    print(f"  {'-' * 80}")
+    print(f"  共 {len(configs)} 个配置 × 2 (对称/非对称)")
+    print(f"\n  {'配置':<30} {'sym_MSE':<12} {'asym_MSE':<12} {'sym_ratio':<10} {'asym_ratio':<10} {'改善':<8}")
+    print(f"  {'-' * 82}")
 
     results = []
     for ratio, svd_eff, res_bits, rank, ub, vb, desc in configs:
-        t0 = time.time()
-        W_q, info = iterative_outlier_svd(
+        # 对称
+        W_q_sym, info_sym = iterative_outlier_svd(
             W, outlier_ratio=ratio, max_svd_eff=svd_eff,
             residual_bits=res_bits, rank=rank, u_bits=ub, v_bits=vb,
-            s_bits=16, group_size=128, asymmetric=asymmetric,
-        )
-        elapsed = time.time() - t0
-        mse = float(np.mean((W_f - W_q.astype(np.float32)) ** 2))
-        eff_raw = info['total_eff_raw']
-        beat = "✅" if mse < direct_mse else "  "
-        status = "✅" if eff_raw <= 4.0 else "❌"
-        print(f"  {status}{beat} {desc:<39} {eff_raw:<10.3f} {mse:<12.6f} {mse/direct_mse:<10.3f} {elapsed:<8.1f}s")
-        results.append({
-            'method': f'iter_outlier_{desc}', 'mse': mse,
-            'ratio': mse/direct_mse, 'eff_raw': eff_raw, 'time': elapsed,
-        })
+            s_bits=16, group_size=128, asymmetric=False)
+        sym_mse = float(np.mean((W_f - W_q_sym.astype(np.float32)) ** 2))
 
-    # Top 10
-    valid = [r for r in results if r['eff_raw'] <= 4.0]
-    valid.sort(key=lambda x: x['mse'])
-    print(f"\n  --- Top 10 (eff_raw ≤ 4.0) ---")
-    for i, r in enumerate(valid[:10]):
+        # 非对称
+        W_q_asym, info_asym = iterative_outlier_svd(
+            W, outlier_ratio=ratio, max_svd_eff=svd_eff,
+            residual_bits=res_bits, rank=rank, u_bits=ub, v_bits=vb,
+            s_bits=16, group_size=128, asymmetric=True)
+        asym_mse = float(np.mean((W_f - W_q_asym.astype(np.float32)) ** 2))
+
+        eff_raw = info_sym['total_eff_raw']
+        sym_ratio = sym_mse / sym4_mse
+        asym_ratio = asym_mse / sym4_mse
+        improve = (1 - asym_mse / sym_mse) * 100
+
+        status = "✅" if eff_raw <= 4.0 else "❌"
+        print(f"  {status} {desc:<29} {sym_mse:<12.6f} {asym_mse:<12.6f} {sym_ratio:<10.3f} {asym_ratio:<10.3f} {improve:+.1f}%")
+
+        results.append({'method': f'{desc}_sym', 'mse': sym_mse, 'ratio': sym_ratio, 'eff_raw': eff_raw})
+        results.append({'method': f'{desc}_asym', 'mse': asym_mse, 'ratio': asym_ratio, 'eff_raw': eff_raw})
+
+    # Top 10 (对称)
+    sym_valid = [r for r in results if r['eff_raw'] <= 4.0 and r['method'].endswith('_sym')]
+    sym_valid.sort(key=lambda x: x['mse'])
+    print(f"\n  --- Top 10 对称 (eff_raw ≤ 4.0) ---")
+    for i, r in enumerate(sym_valid[:10]):
+        print(f"  {i+1:2d}. {r['method']:<45} eff={r['eff_raw']:.3f} mse={r['mse']:.6f} ratio={r['ratio']:.3f}")
+
+    # Top 10 (非对称)
+    asym_valid = [r for r in results if r['eff_raw'] <= 4.0 and r['method'].endswith('_asym')]
+    asym_valid.sort(key=lambda x: x['mse'])
+    print(f"\n  --- Top 10 非对称 (eff_raw ≤ 4.0) ---")
+    for i, r in enumerate(asym_valid[:10]):
         print(f"  {i+1:2d}. {r['method']:<45} eff={r['eff_raw']:.3f} mse={r['mse']:.6f} ratio={r['ratio']:.3f}")
 
     return results
@@ -306,7 +326,7 @@ def run_mse_tests(args):
         'iterative_svd': lambda: test_mse_iterative_svd(W, W_f, direct_mse, args.quick, asym),
         'outlier_svd': lambda: test_mse_outlier_svd(W, W_f, direct_mse, args.quick, asym),
         'iterative_outlier': lambda: test_mse_iterative_outlier(W, W_f, direct_mse, args.quick, asym),
-        'iter_outlier_tune': lambda: test_mse_iter_outlier_tune(W, W_f, direct_mse, asym),
+        'iter_outlier_tune': lambda: test_mse_iter_outlier_tune(W, W_f, direct_mse),
     }
 
     all_methods = ['direct', 'important', 'svd_hybrid', 'iterative_svd',
