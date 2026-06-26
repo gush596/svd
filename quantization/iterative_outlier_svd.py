@@ -18,8 +18,15 @@ from .core import quantize_mse
 
 
 def _svd_decompose(matrix):
-    """SVD 分解"""
-    return np.linalg.svd(matrix, full_matrices=False)
+    """SVD 分解，带不收敛保护"""
+    try:
+        U, S, Vt = np.linalg.svd(matrix, full_matrices=False)
+        return U, S, Vt
+    except np.linalg.LinAlgError:
+        # SVD 不收敛时，用更小的矩阵重试或跳过
+        # 添加微小噪声后重试
+        noisy = matrix + np.random.randn(*matrix.shape).astype(matrix.dtype) * 1e-10
+        return np.linalg.svd(noisy, full_matrices=False)
 
 
 def iterative_outlier_svd(
