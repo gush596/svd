@@ -2,7 +2,10 @@ __pycache__/
 *.pyc
 *.pyo
 test_results.json
--e 
+
 # 量化checkpoint缓存
 checkpoints/
 .venv/
+
+# 测试结果
+results/

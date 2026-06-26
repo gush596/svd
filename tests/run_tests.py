@@ -27,6 +27,8 @@
 
 import sys
 import os
+import io
+from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 
@@ -575,6 +577,35 @@ def run_power_iter_tests(args):
 #  主入口
 # ═══════════════════════════════════════════════════════════════════════
 
+class TeeOutput:
+    """同时输出到终端和内存缓冲区"""
+    def __init__(self, stream):
+        self.stream = stream
+        self.buffer = io.StringIO()
+
+    def write(self, data):
+        self.stream.write(data)
+        self.buffer.write(data)
+
+    def flush(self):
+        self.stream.flush()
+
+    def getvalue(self):
+        return self.buffer.getvalue()
+
+
+def make_result_dir(scheme, method, quick):
+    """创建结果目录: results/<scheme>_<method>_<timestamp>/"""
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    tag = f"{scheme}_{method}"
+    if quick:
+        tag += "_quick"
+    result_dir = os.path.join(project_root, "results", f"{tag}_{ts}")
+    os.makedirs(result_dir, exist_ok=True)
+    return result_dir
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="SVD 量化统一测试入口",
@@ -603,30 +634,66 @@ def main():
                         help="PPL 测试序列长度")
     parser.add_argument("--quick", action="store_true",
                         help="快速测试模式（少量配置）")
-    parser.add_argument("--output", default=None,
-                        help="结果保存路径 (JSON)")
 
     args = parser.parse_args()
 
+    # 创建结果目录并捕获输出
+    result_dir = make_result_dir(args.scheme, args.method, args.quick)
+    tee = TeeOutput(sys.stdout)
+    old_stdout = sys.stdout
+    sys.stdout = tee
+
     t_start = time.time()
 
-    if args.scheme == "mse":
-        results = run_mse_tests(args)
-    elif args.scheme == "ppl":
-        results = run_ppl_tests(args)
-    elif args.scheme == "power_iter":
-        results = run_power_iter_tests(args)
-    else:
-        print(f"未知方案: {args.scheme}")
-        return
+    try:
+        if args.scheme == "mse":
+            results = run_mse_tests(args)
+        elif args.scheme == "ppl":
+            results = run_ppl_tests(args)
+        elif args.scheme == "power_iter":
+            results = run_power_iter_tests(args)
+        else:
+            print(f"未知方案: {args.scheme}")
+            return
 
-    elapsed_total = time.time() - t_start
-    print(f"\n总耗时: {elapsed_total:.1f}s")
+        elapsed_total = time.time() - t_start
+        print(f"\n总耗时: {elapsed_total:.1f}s")
 
-    if args.output and results:
-        with open(args.output, 'w') as f:
+    finally:
+        sys.stdout = old_stdout
+
+    # 保存控制台日志
+    log_path = os.path.join(result_dir, "output.log")
+    with open(log_path, 'w', encoding='utf-8') as f:
+        f.write(tee.getvalue())
+
+    # 保存 JSON 结果
+    if results:
+        json_path = os.path.join(result_dir, "results.json")
+        with open(json_path, 'w', encoding='utf-8') as f:
             json.dump(results, f, indent=2, ensure_ascii=False, default=str)
-        print(f"结果已保存到: {args.output}")
+
+    # 保存运行参数
+    meta_path = os.path.join(result_dir, "meta.json")
+    with open(meta_path, 'w', encoding='utf-8') as f:
+        json.dump({
+            'scheme': args.scheme,
+            'method': args.method,
+            'quick': args.quick,
+            'model': args.model,
+            'n_samples': args.n_samples,
+            'seqlen': args.seqlen,
+            'elapsed_seconds': time.time() - t_start,
+            'timestamp': datetime.now().isoformat(),
+        }, f, indent=2, ensure_ascii=False)
+
+    # 打印到终端（tee 已关闭）
+    print(tee.getvalue())
+    print(f"\n📁 结果已保存到: {result_dir}/")
+    print(f"   output.log   - 控制台完整输出")
+    if results:
+        print(f"   results.json - 结构化结果")
+    print(f"   meta.json    - 运行参数")
 
 
 if __name__ == "__main__":
