@@ -14,3 +14,4 @@ from .important import important_protection
 from .adaptive import adaptive_quant
 from .iterative_svd import iterative_residual_svd, compute_max_rounds
 from .outlier_svd import outlier_svd_quantize
+from .iterative_outlier_svd import iterative_outlier_svd
