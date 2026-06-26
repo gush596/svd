@@ -687,8 +687,7 @@ def main():
             'timestamp': datetime.now().isoformat(),
         }, f, indent=2, ensure_ascii=False)
 
-    # 打印到终端（tee 已关闭）
-    print(tee.getvalue())
+    # 打印摘要到终端（详细输出已在运行时通过 tee 实时输出）
     print(f"\n📁 结果已保存到: {result_dir}/")
     print(f"   output.log   - 控制台完整输出")
     if results:
