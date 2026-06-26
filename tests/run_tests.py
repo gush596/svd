@@ -240,6 +240,74 @@ def test_mse_iterative_outlier(W, W_f, direct_mse, quick=False):
     return results
 
 
+def test_mse_asymmetric(W, W_f, direct_mse, quick=False):
+    """对称 vs 非对称量化对比"""
+    from quantization.core import quantize_mse, quantize_mse_asymmetric
+    print_section("对称 vs 非对称量化")
+
+    results = []
+    # 直接量化对比
+    print("  --- 直接量化 ---")
+    for n_bits in [2, 3, 4]:
+        sym_q = quantize_mse(W, n_bits, 128)
+        asym_q = quantize_mse_asymmetric(W, n_bits, 128)
+        sym_mse = float(np.mean((W_f - sym_q) ** 2))
+        asym_mse = float(np.mean((W_f - asym_q) ** 2))
+        improve = (1 - asym_mse / sym_mse) * 100
+        print(f"  {n_bits}-bit: sym={sym_mse:.6f}  asym={asym_mse:.6f}  改善={improve:+.1f}%")
+        results.append({'method': f'direct_{n_bits}bit_sym', 'mse': sym_mse,
+                        'ratio': sym_mse/direct_mse, 'eff': float(n_bits)})
+        results.append({'method': f'direct_{n_bits}bit_asym', 'mse': asym_mse,
+                        'ratio': asym_mse/direct_mse, 'eff': float(n_bits)})
+    return results
+
+
+def test_mse_iter_outlier_tune(W, W_f, direct_mse):
+    """迭代异常值 SVD 大范围参数扫描"""
+    from quantization.iterative_outlier_svd import iterative_outlier_svd
+    print_section("迭代异常值 SVD 参数扫描")
+
+    configs = []
+    for ratio in [0.05, 0.10, 0.15, 0.20]:
+        for rank in [4, 8, 16]:
+            for ub, vb in [(3, 3), (4, 4), (3, 4), (4, 3)]:
+                for svd_eff in [0.5, 1.0, 1.5, 2.0]:
+                    desc = f"r={ratio} eff={svd_eff} rk={rank} u{ub}v{vb}"
+                    configs.append((ratio, svd_eff, 3, rank, ub, vb, desc))
+
+    print(f"  共 {len(configs)} 个配置")
+    print(f"\n  {'配置':<40} {'eff_raw':<10} {'MSE':<12} {'vs Direct':<10} {'时间':<8}")
+    print(f"  {'-' * 80}")
+
+    results = []
+    for ratio, svd_eff, res_bits, rank, ub, vb, desc in configs:
+        t0 = time.time()
+        W_q, info = iterative_outlier_svd(
+            W, outlier_ratio=ratio, max_svd_eff=svd_eff,
+            residual_bits=res_bits, rank=rank, u_bits=ub, v_bits=vb,
+            s_bits=16, group_size=128,
+        )
+        elapsed = time.time() - t0
+        mse = float(np.mean((W_f - W_q.astype(np.float32)) ** 2))
+        eff_raw = info['total_eff_raw']
+        beat = "✅" if mse < direct_mse else "  "
+        status = "✅" if eff_raw <= 4.0 else "❌"
+        print(f"  {status}{beat} {desc:<39} {eff_raw:<10.3f} {mse:<12.6f} {mse/direct_mse:<10.3f} {elapsed:<8.1f}s")
+        results.append({
+            'method': f'iter_outlier_{desc}', 'mse': mse,
+            'ratio': mse/direct_mse, 'eff_raw': eff_raw, 'time': elapsed,
+        })
+
+    # Top 10
+    valid = [r for r in results if r['eff_raw'] <= 4.0]
+    valid.sort(key=lambda x: x['mse'])
+    print(f"\n  --- Top 10 (eff_raw ≤ 4.0) ---")
+    for i, r in enumerate(valid[:10]):
+        print(f"  {i+1:2d}. {r['method']:<45} eff={r['eff_raw']:.3f} mse={r['mse']:.6f} ratio={r['ratio']:.3f}")
+
+    return results
+
+
 def run_mse_tests(args):
     """运行 MSE 测试"""
     print_section("SVD 量化 MSE 综合测试 (合成数据)")
@@ -257,10 +325,12 @@ def run_mse_tests(args):
         'iterative_svd': lambda: test_mse_iterative_svd(W, W_f, direct_mse, args.quick),
         'outlier_svd': lambda: test_mse_outlier_svd(W, W_f, direct_mse, args.quick),
         'iterative_outlier': lambda: test_mse_iterative_outlier(W, W_f, direct_mse, args.quick),
+        'asymmetric': lambda: test_mse_asymmetric(W, W_f, direct_mse, args.quick),
+        'iter_outlier_tune': lambda: test_mse_iter_outlier_tune(W, W_f, direct_mse),
     }
 
-    all_methods = ['direct', 'important', 'svd_hybrid', 'iterative_svd',
-                   'outlier_svd', 'iterative_outlier']
+    all_methods = ['direct', 'asymmetric', 'important', 'svd_hybrid', 'iterative_svd',
+                   'outlier_svd', 'iterative_outlier', 'iter_outlier_tune']
 
     if args.method == 'all':
         methods_to_run = all_methods
@@ -623,8 +693,9 @@ def main():
                         choices=["mse", "ppl", "power_iter"],
                         help="测试方案: mse=合成数据, ppl=真实模型, power_iter=幂迭代对比")
     parser.add_argument("--method", default="all",
-                        choices=["all", "direct", "important", "svd_hybrid",
-                                 "iterative_svd", "outlier_svd", "iterative_outlier"],
+                        choices=["all", "direct", "asymmetric", "important", "svd_hybrid",
+                                 "iterative_svd", "outlier_svd", "iterative_outlier",
+                                 "iter_outlier_tune"],
                         help="量化方法 (默认 all)")
     parser.add_argument("--model", default="facebook/opt-125m",
                         help="PPL 测试用的模型")
