@@ -456,3 +456,84 @@ u3v3 可以跑更多轮（27 vs 23），最终效果反而略好。
 - 残差不能简单舍弃，需要量化存储
 - 或者大幅增加轮数（但 eff 预算不允许）
 - 需要结合其他方法（重要值保护 + SVD 混合）
+
+---
+
+## 方法 7: 异常值 SVD + 残差量化 (2026-06-26)
+
+### 算法
+
+```
+1. 从 W 中筛选 top-k% 异常值（按绝对值）
+2. 构造稀疏异常值矩阵 W_outlier（异常值保留原位，其余为 0）
+3. 对 W_outlier 做迭代残差 SVD（u=3, v=3, s-fp16）
+4. 残差 = W - W_outlier_approx
+5. 对残差做 n-bit 直接量化
+
+W_approx = W_outlier_svd + W_residual_quantized
+```
+
+### 等效 bit 公式
+
+```
+SVD 部分:
+  eff_raw(SVD) = n_rounds × rank × (out × u_bits + in × v_bits + s_bits_eff) / (out × in)
+  eff_full(SVD) = (svd_bits_total + scale_bits_total) / (out × in)
+
+残差部分:
+  residual_eff = residual_bits  (每参数 residual_bits bit)
+
+总等效 bit (优化: outlier 位置不存残差):
+  optimized_eff_raw  = eff_raw(SVD)  + residual_bits - (n_outliers / total_params) × residual_bits
+  optimized_eff_full = eff_full(SVD) + residual_bits - (n_outliers / total_params) × residual_bits
+```
+
+### 实验 1: 不同 outlier_ratio × svd_eff × residual_bits (768×768)
+
+合成数据: rank-96 低秩 + 1% 大幅异常值
+
+| outlier_ratio | svd_eff | res_bits | 轮数 | eff_full | MSE | vs Direct |
+|--------------|---------|----------|------|----------|-----|----------|
+| 0.05 | 1.0 | 3 | 13 | 3.7993 | 0.097671 | 2.0428x |
+| 0.10 | 1.0 | 3 | 13 | 3.6493 | 0.089823 | 1.8786x |
+| 0.15 | 1.0 | 3 | 13 | 3.4993 | 0.086193 | 1.8027x |
+| 0.20 | 1.0 | 3 | 13 | 3.3493 | 0.082639 | 1.7284x |
+| 0.30 | 1.0 | 3 | 13 | 3.0493 | 0.072914 | 1.5250x |
+
+**❌ residual_bits=3 全部不敌直接 4-bit**
+
+### 实验 2: residual_bits=4 关键突破
+
+| outlier_ratio | svd_eff | res_bits | 轮数 | eff_full | MSE | vs Direct |
+|--------------|---------|----------|------|----------|-----|----------|
+| 0.10 | 0.40 | 4 | 5 | 3.9651 | 0.027341 | **0.8537x** ✅ |
+| 0.12 | 0.50 | 4 | 6 | 3.9582 | 0.026422 | **0.8250x** ✅ |
+| 0.15 | 0.50 | 4 | 6 | 3.8382 | 0.026441 | **0.8256x** ✅ |
+| 0.15 | 0.60 | 4 | 8 | 3.9842 | 0.024897 | **0.7774x** ✅ |
+| 0.18 | 0.60 | 4 | 8 | 3.8642 | 0.024854 | **0.7760x** ✅ |
+| 0.20 | 0.60 | 4 | 8 | 3.7842 | 0.024902 | **0.7776x** ✅ |
+| **0.25** | **0.75** | **4** | **10** | **3.7303** | **0.023378** | **0.7300x** ✅ |
+
+### 🔥 重大发现
+
+**异常值 SVD + 4-bit 残差量化，在 eff_full ≤ 4.0 约束下首次大幅击败直接 4-bit！**
+
+- ⭐ 最优配置: outlier_ratio=0.25, svd_eff=0.75, residual_bits=4
+  - eff_full = 3.73 (满足 ≤4.0 约束)
+  - MSE 比直接 4-bit 低 **27.0%**
+- 推荐配置: outlier_ratio=0.15~0.20, svd_eff=0.50~0.60, residual_bits=4
+  - eff_full = 3.64~3.98
+  - MSE 比直接 4-bit 低 **17%~22%**
+
+### 关键教训
+
+1. **residual_bits 必须用 4-bit**: 之前测试用 3-bit 残差导致全部失败。残差覆盖整个矩阵，3-bit 量化损失太大。
+2. **svd_eff 不宜过高**: svd_eff=1.0 时 eff_full 容易超 4.0。0.4~0.75 是最佳范围。
+3. **outlier_ratio 越高越好**: 更多异常值被 SVD 精确表示，残差更小。但受 eff 预算限制。
+4. **与方法 5/6 对比**: 残差舍弃模式在真实模型上失败(PPL=837+)，但异常值 SVD + 残差量化模式理论上更优——因为残差被完整量化而非舍弃。
+
+### 下一步
+
+- 在 OPT-125M 上做 PPL 测试验证
+- 探索 outlier_ratio 和 svd_eff 的最优组合
+- 对比不同 u/v bit 配置

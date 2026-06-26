@@ -5,3 +5,4 @@ test_results.json
 -e 
 # 量化checkpoint缓存
 checkpoints/
+.venv/
