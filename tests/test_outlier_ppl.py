@@ -96,8 +96,8 @@ def main():
 
         ppl = evaluate_ppl(model, tokenizer)
         delta = ppl - fp_ppl
-        avg_eff_raw = np.mean([i['optimized_eff_raw'] for i in layer_infos])
-        avg_eff_full = np.mean([i['optimized_eff_full'] for i in layer_infos])
+        avg_eff_raw = np.mean([i['total_eff_raw'] for i in layer_infos])
+        avg_eff_full = np.mean([i['total_eff_full'] for i in layer_infos])
 
         r = {'desc': desc, 'ppl': ppl, 'delta': delta, 'eff_raw': avg_eff_raw, 'eff_full': avg_eff_full, 'time': qt}
         results.append(r)

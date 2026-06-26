@@ -114,27 +114,26 @@ def _outlier_svd_numpy(
     W_approx = W_outlier_approx + W_residual_q
 
     # ── 计算综合等效 bit ──
-    # 异常值部分: svd_info['effective_bits'] 是相对于完整矩阵的 eff
-    #   但 SVD 只作用于异常值矩阵（稀疏），实际存储更少
-    #   因为 U/V 只有 outlier 位置有值 → 但我们仍然存储完整的 U, V 矩阵
-    # 残差部分: 所有参数都用 residual_bits 量化
-
-    # 简化计算: 异常值部分的 eff_raw (来自 svd_info)
+    #
+    # 存储内容:
+    #   1. SVD: U[out,rank], S[rank], V[rank,in] × n_rounds (覆盖全矩阵)
+    #   2. 残差量化: residual_bits per param × ALL 参数 (残差在所有位置非零)
+    #
+    # ⚠️ 不能省略 outlier 位置的残差！
+    #    residual = W - W_outlier_approx, outlier 位置的残差 = 原始异常值 - SVD近似 ≠ 0
+    #
     svd_eff_raw = svd_info['effective_bits']
     svd_eff_full = svd_info.get('effective_bits_full', svd_eff_raw)
 
-    # 残差部分的 eff: 所有参数用 residual_bits
-    # 但可以优化: 只存储非 outlier 位置的残差 (outlier 位置已被 SVD 覆盖)
-    # 为了简单，全部存储
-    residual_eff = residual_bits  # 每个参数 residual_bits
+    # 残差部分的 eff: 所有参数用 residual_bits，加上 scale 开销
+    # quantize_mse 对全矩阵做 group 量化，每 group 一个 float32 scale
+    n_groups_residual = math.ceil(total_params / group_size)
+    residual_bits_total = total_params * residual_bits + n_groups_residual * 32
+    residual_eff_full = residual_bits_total / total_params
 
-    total_eff_raw = svd_eff_raw + residual_eff
-    total_eff_full = svd_eff_full + residual_eff
-
-    # 实际可以优化: outlier 位置不需要存残差
-    # 节省的 bit = n_outliers * residual_bits / total_params
-    optimized_eff_raw = total_eff_raw - (n_actual / total_params) * residual_bits
-    optimized_eff_full = total_eff_full - (n_actual / total_params) * residual_bits
+    # 正确的总等效 bit: SVD + 残差 (全矩阵)
+    total_eff_raw = svd_eff_raw + residual_bits
+    total_eff_full = svd_eff_full + residual_eff_full
 
     mse = float(np.mean((W_f - W_approx) ** 2))
     mse_svd_only = float(np.mean((W_f - W_outlier_approx) ** 2))
@@ -149,13 +148,10 @@ def _outlier_svd_numpy(
         'svd_eff_raw': float(svd_eff_raw),
         'svd_eff_full': float(svd_eff_full),
         'residual_bits': residual_bits,
-        'residual_eff': float(residual_eff),
-        # 总等效 bit（保守：全部存）
+        'residual_eff_raw': float(residual_bits),
+        'residual_eff_full': float(residual_eff_full),
         'total_eff_raw': float(total_eff_raw),
         'total_eff_full': float(total_eff_full),
-        # 总等效 bit（优化：outlier 位置不重复存残差）
-        'optimized_eff_raw': float(optimized_eff_raw),
-        'optimized_eff_full': float(optimized_eff_full),
         'mse': mse,
         'mse_svd_only': mse_svd_only,
         'mse_residual_quant': mse_residual,

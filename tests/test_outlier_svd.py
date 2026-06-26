@@ -46,8 +46,8 @@ def main():
             svd_s_bits=16, group_size=128,
         )
         mse = float(np.mean((W_f - W_q.astype(np.float32)) ** 2))
-        print(f"{ratio:<15.2f} {info['svd_rounds']:<12} {info['optimized_eff_raw']:<14.4f} "
-              f"{info['optimized_eff_full']:<14.4f} {mse:<12.6f} {mse/direct_mse:<10.4f} "
+        print(f"{ratio:<15.2f} {info['svd_rounds']:<12} {info['total_eff_raw']:<14.4f} "
+              f"{info['total_eff_full']:<14.4f} {mse:<12.6f} {mse/direct_mse:<10.4f} "
               f"{info['outlier_pct_actual']*100:<12.1f}")
 
     # ── 不同 residual_bits ──
@@ -62,7 +62,7 @@ def main():
             svd_s_bits=16, group_size=128,
         )
         mse = float(np.mean((W_f - W_q.astype(np.float32)) ** 2))
-        print(f"{rb:<10} {info['optimized_eff_raw']:<14.4f} {info['optimized_eff_full']:<14.4f} "
+        print(f"{rb:<10} {info['total_eff_raw']:<14.4f} {info['total_eff_full']:<14.4f} "
               f"{mse:<12.6f} {mse/direct_mse:<10.4f}")
 
     # ── 不同 svd_eff_bits ──
@@ -77,8 +77,8 @@ def main():
             svd_s_bits=16, group_size=128,
         )
         mse = float(np.mean((W_f - W_q.astype(np.float32)) ** 2))
-        print(f"{se:<10.2f} {info['svd_rounds']:<12} {info['optimized_eff_raw']:<14.4f} "
-              f"{info['optimized_eff_full']:<14.4f} {mse:<12.6f} {mse/direct_mse:<10.4f}")
+        print(f"{se:<10.2f} {info['svd_rounds']:<12} {info['total_eff_raw']:<14.4f} "
+              f"{info['total_eff_full']:<14.4f} {mse:<12.6f} {mse/direct_mse:<10.4f}")
 
     print(f"\n  ✅ 测试完成")
 
